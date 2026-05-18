@@ -1,7 +1,7 @@
 flask==3.0.3
 flask-cors==4.0.1
 demucs==4.0.1
-torch==2.11.0
-torchaudio==2.11.0
+torch==2.1.0
+torchaudio==2.1.0
 gunicorn==21.2.0
 werkzeug==3.0.3
