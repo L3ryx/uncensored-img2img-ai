@@ -2,11 +2,16 @@ services:
   - type: web
     name: stemsplit
     env: python
-    buildCommand: pip install -r requirements.txt
+    # Installe les deps ET pré-télécharge le modèle au build
+    buildCommand: |
+      pip install -r requirements.txt &&
+      python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s'); print('Modèle pré-téléchargé ✓')"
     startCommand: gunicorn app:app --workers 1 --timeout 600 --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11.0"
+      - key: DEMUCS_MODEL
+        value: "htdemucs_6s"
     disk:
       name: audio-data
       mountPath: /opt/render/project/src
