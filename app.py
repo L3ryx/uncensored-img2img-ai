@@ -1,13 +1,22 @@
 import os
 import uuid
 import shutil
-import subprocess
 import threading
 import time
+import torch
+import logging
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+
+# ── Demucs API Python (pas subprocess) ────────────────────────────────────────
+from demucs.pretrained import get_model
+from demucs.apply import apply_model
+from demucs.audio import AudioFile, save_audio
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +29,8 @@ OUTPUT_FOLDER.mkdir(exist_ok=True)
 ALLOWED_EXTENSIONS = {"mp3", "wav", "flac", "ogg", "m4a", "aac"}
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
+MODEL_NAME = os.environ.get("DEMUCS_MODEL", "htdemucs_6s")
+
 jobs: dict = {}
 
 STEM_LABELS = {
@@ -28,7 +39,19 @@ STEM_LABELS = {
     "bass":   {"fr": "Basses",      "icon": "🎸", "color": "#54a0ff"},
     "guitar": {"fr": "Guitare",     "icon": "🎵", "color": "#5f27cd"},
     "other":  {"fr": "Autres",      "icon": "🎹", "color": "#00d2d3"},
+    "piano":  {"fr": "Piano",       "icon": "🎹", "color": "#1dd1a1"},
 }
+
+# ── Chargement du modèle UNE SEULE FOIS au démarrage ──────────────────────────
+log.info(f"Chargement du modèle {MODEL_NAME}...")
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL = get_model(MODEL_NAME)
+MODEL.to(DEVICE)
+MODEL.eval()
+log.info(f"Modèle chargé sur {DEVICE} ✓")
+
+# Mutex : un seul job à la fois (évite OOM sur Render free tier)
+_model_lock = threading.Semaphore(1)
 
 
 def allowed_file(filename):
@@ -51,28 +74,47 @@ def cleanup_loop():
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
 
-def run_demucs(job_id, filepath):
+def run_demucs(job_id: str, filepath: Path):
     jobs[job_id]["status"] = "processing"
     out_dir = OUTPUT_FOLDER / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        cmd = [
-            "python", "-m", "demucs",
-            "-n", "htdemucs_6s",
-            "--out", str(out_dir),
-            str(filepath),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = result.stderr[-600:]
-            return
 
+    try:
+        # ── Chargement audio ──────────────────────────────────────────────────
+        wav = AudioFile(filepath).read(
+            streams=0,
+            samplerate=MODEL.samplerate,
+            channels=MODEL.audio_channels,
+        )
+        # wav shape : (channels, samples) → ajouter batch dim
+        ref = wav.mean(0)
+        wav = (wav - ref.mean()) / ref.std()  # normalisation
+        wav = wav.unsqueeze(0).to(DEVICE)     # (1, C, T)
+
+        # ── Séparation (modèle déjà en mémoire) ──────────────────────────────
+        with _model_lock:
+            with torch.no_grad():
+                sources = apply_model(
+                    MODEL,
+                    wav,
+                    device=DEVICE,
+                    shifts=1,
+                    split=True,
+                    overlap=0.25,
+                    progress=False,
+                )[0]  # (stems, C, T)
+
+        # ── Sauvegarde des pistes ─────────────────────────────────────────────
         stems = {}
-        for wav in out_dir.rglob("*.wav"):
-            stem_name = wav.stem.lower()
+        for stem_idx, stem_name in enumerate(MODEL.sources):
+            audio = sources[stem_idx]           # (C, T)
+            # re-dénormalisation
+            audio = audio * ref.std() + ref.mean()
+            out_path = out_dir / f"{stem_name}.wav"
+            save_audio(audio.cpu(), str(out_path), samplerate=MODEL.samplerate)
+
             if stem_name in STEM_LABELS:
-                stems[stem_name] = str(wav.relative_to(OUTPUT_FOLDER))
+                stems[stem_name] = str(out_path.relative_to(OUTPUT_FOLDER))
 
         if not stems:
             jobs[job_id]["status"] = "error"
@@ -82,10 +124,8 @@ def run_demucs(job_id, filepath):
         jobs[job_id]["status"] = "done"
         jobs[job_id]["stems"] = stems
 
-    except subprocess.TimeoutExpired:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = "Timeout — fichier trop long (max ~5 min)."
     except Exception as e:
+        log.exception(f"Erreur job {job_id}")
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
     finally:
@@ -144,6 +184,11 @@ def download(filepath):
     if not full_path.exists():
         return jsonify({"error": "Fichier introuvable."}), 404
     return send_file(full_path, as_attachment=True)
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "model": MODEL_NAME, "device": DEVICE})
 
 
 if __name__ == "__main__":
