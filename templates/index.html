@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StemSplit — Séparateur de pistes audio IA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: #1e1e2e;
+    --text: #e8e8f0;
+    --muted: #6b6b80;
+    --accent: #7c6aff;
+    --accent2: #ff6b9d;
+    --vocals: #ff6b9d;
+    --drums:  #ff9f43;
+    --bass:   #54a0ff;
+    --guitar: #a29bfe;
+    --other:  #00cec9;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Background noise ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+  }
+
+  /* ── Grid lines ── */
+  body::after {
+    content: '';
+    position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(124,106,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,106,255,0.04) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+  }
+
+  .container {
+    position: relative; z-index: 1;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 40px 20px 80px;
+  }
+
+  /* ── Header ── */
+  header { text-align: center; margin-bottom: 60px; }
+
+  .logo {
+    display: inline-flex; align-items: center; gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .logo-icon {
+    width: 44px; height: 44px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+  }
+
+  .logo-text {
+    font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
+  }
+
+  .logo-text span { color: var(--accent); }
+
+  h1 {
+    font-size: clamp(28px, 7vw, 56px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--text) 40%, var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 16px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .model-badge {
+    display: inline-block;
+    margin-top: 14px;
+    padding: 5px 14px;
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+    color: var(--muted);
+    background: var(--surface);
+  }
+
+  .model-badge span { color: var(--accent); }
+
+  /* ── Upload zone ── */
+  .upload-card {
+    background: var(--surface);
+    border: 2px dashed var(--border);
+    border-radius: 20px;
+    padding: 50px 30px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .upload-card:hover, .upload-card.dragover {
+    border-color: var(--accent);
+    background: rgba(124,106,255,0.05);
+  }
+
+  .upload-card input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+
+  .upload-icon { font-size: 48px; margin-bottom: 16px; display: block; }
+
+  .upload-title {
+    font-size: 20px; font-weight: 700; margin-bottom: 8px;
+  }
+
+  .upload-hint {
+    color: var(--muted);
+    font-size: 14px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .upload-formats {
+    margin-top: 12px;
+    display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+  }
+
+  .fmt-tag {
+    padding: 3px 10px;
+    background: var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: 'Space Mono', monospace;
+    color: var(--muted);
+  }
+
+  /* ── File selected preview ── */
+  .file-preview {
+    display: none;
+    margin-top: 20px;
+    background: var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .file-preview.show { display: flex; }
+
+  .file-preview-icon { font-size: 24px; }
+
+  .file-preview-info { flex: 1; text-align: left; }
+
+  .file-preview-name {
+    font-weight: 700; font-size: 14px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 220px;
+  }
+
+  .file-preview-size {
+    font-size: 12px; color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* ── Button ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 14px 32px;
+    background: linear-gradient(135deg, var(--accent), #9b59f5);
+    color: #fff;
+    border: none; border-radius: 12px;
+    font-family: 'Syne', sans-serif;
+    font-size: 16px; font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    width: 100%; justify-content: center;
+    margin-top: 20px;
+  }
+
+  .btn:hover { opacity: 0.88; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  /* ── Progress ── */
+  .progress-section {
+    display: none;
+    margin-top: 40px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 30px;
+    text-align: center;
+  }
+
+  .progress-section.show { display: block; }
+
+  .spinner {
+    width: 56px; height: 56px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto 20px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .progress-label {
+    font-size: 18px; font-weight: 700; margin-bottom: 6px;
+  }
+
+  .progress-sub {
+    font-size: 13px; color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* ── Wave bars animation ── */
+  .wave-bars {
+    display: flex; align-items: flex-end; justify-content: center;
+    gap: 4px; height: 40px; margin: 20px 0 0;
+  }
+
+  .wave-bars span {
+    width: 5px; border-radius: 3px;
+    background: var(--accent);
+    animation: wave 1.2s ease-in-out infinite;
+  }
+
+  .wave-bars span:nth-child(1) { animation-delay: 0s;    height: 20px; }
+  .wave-bars span:nth-child(2) { animation-delay: 0.1s;  height: 35px; }
+  .wave-bars span:nth-child(3) { animation-delay: 0.2s;  height: 15px; }
+  .wave-bars span:nth-child(4) { animation-delay: 0.3s;  height: 40px; }
+  .wave-bars span:nth-child(5) { animation-delay: 0.4s;  height: 25px; }
+  .wave-bars span:nth-child(6) { animation-delay: 0.5s;  height: 10px; }
+  .wave-bars span:nth-child(7) { animation-delay: 0.35s; height: 30px; }
+
+  @keyframes wave {
+    0%, 100% { transform: scaleY(1); }
+    50%       { transform: scaleY(0.3); }
+  }
+
+  /* ── Results ── */
+  .results-section {
+    display: none;
+    margin-top: 40px;
+  }
+
+  .results-section.show { display: block; }
+
+  .results-title {
+    font-size: 22px; font-weight: 800;
+    margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .stems-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+  }
+
+  .stem-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px;
+    text-align: center;
+    transition: transform 0.15s, border-color 0.15s;
+    animation: fadeUp 0.4s ease both;
+  }
+
+  .stem-card:hover { transform: translateY(-3px); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .stem-card:nth-child(1) { animation-delay: 0.0s; }
+  .stem-card:nth-child(2) { animation-delay: 0.08s; }
+  .stem-card:nth-child(3) { animation-delay: 0.16s; }
+  .stem-card:nth-child(4) { animation-delay: 0.24s; }
+  .stem-card:nth-child(5) { animation-delay: 0.32s; }
+
+  .stem-icon { font-size: 36px; margin-bottom: 10px; display: block; }
+
+  .stem-name {
+    font-size: 16px; font-weight: 700; margin-bottom: 4px;
+  }
+
+  .stem-key {
+    font-size: 11px; color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 16px;
+  }
+
+  .dl-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 9px 20px;
+    border-radius: 10px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px; font-weight: 700;
+    text-decoration: none;
+    color: #fff;
+    transition: opacity 0.2s, transform 0.1s;
+    width: 100%; justify-content: center;
+  }
+
+  .dl-btn:hover { opacity: 0.82; transform: translateY(-1px); }
+
+  /* ── Error ── */
+  .error-box {
+    display: none;
+    margin-top: 20px;
+    background: rgba(255,70,70,0.08);
+    border: 1px solid rgba(255,70,70,0.3);
+    border-radius: 12px;
+    padding: 16px 20px;
+    color: #ff6b6b;
+    font-size: 14px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .error-box.show { display: block; }
+
+  /* ── Reset ── */
+  .reset-btn {
+    margin-top: 24px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 10px 24px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    transition: color 0.2s, border-color 0.2s;
+    display: none;
+  }
+
+  .reset-btn.show { display: inline-block; }
+  .reset-btn:hover { color: var(--text); border-color: var(--muted); }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    margin-top: 60px;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🎛️</div>
+      <div class="logo-text">Stem<span>Split</span></div>
+    </div>
+    <h1>Sépare tes pistes audio avec l'IA</h1>
+    <p class="subtitle">Voix · Percussions · Basses · Guitare · Autres</p>
+    <div class="model-badge">Propulsé par <span>Demucs htdemucs_6s</span> · HuggingFace</div>
+  </header>
+
+  <!-- Upload -->
+  <div class="upload-card" id="uploadCard">
+    <input type="file" id="fileInput" accept=".mp3,.wav,.flac,.ogg,.m4a,.aac">
+    <span class="upload-icon">🎵</span>
+    <div class="upload-title">Dépose ton fichier audio ici</div>
+    <div class="upload-hint">ou clique pour choisir</div>
+    <div class="upload-formats">
+      <span class="fmt-tag">MP3</span>
+      <span class="fmt-tag">WAV</span>
+      <span class="fmt-tag">FLAC</span>
+      <span class="fmt-tag">OGG</span>
+      <span class="fmt-tag">M4A</span>
+      <span class="fmt-tag">AAC</span>
+    </div>
+  </div>
+
+  <div class="file-preview" id="filePreview">
+    <span class="file-preview-icon">🎶</span>
+    <div class="file-preview-info">
+      <div class="file-preview-name" id="previewName">—</div>
+      <div class="file-preview-size" id="previewSize">—</div>
+    </div>
+  </div>
+
+  <button class="btn" id="splitBtn" disabled>
+    ✦ Séparer les pistes
+  </button>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- Progress -->
+  <div class="progress-section" id="progressSection">
+    <div class="spinner"></div>
+    <div class="progress-label" id="progressLabel">Analyse en cours…</div>
+    <div class="progress-sub" id="progressSub">Cela peut prendre 2–5 minutes selon la durée du fichier.</div>
+    <div class="wave-bars">
+      <span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="resultsSection">
+    <div class="results-title">✦ Pistes extraites</div>
+    <div class="stems-grid" id="stemsGrid"></div>
+    <button class="reset-btn show" id="resetBtn">← Nouveau fichier</button>
+  </div>
+
+  <footer>
+    StemSplit · Demucs par Meta Research · Hébergé sur Render
+  </footer>
+</div>
+
+<script>
+const COLORS = {
+  vocals: "#ff6b9d",
+  drums:  "#ff9f43",
+  bass:   "#54a0ff",
+  guitar: "#a29bfe",
+  other:  "#00cec9",
+};
+
+const ICONS = {
+  vocals: "🎤",
+  drums:  "🥁",
+  bass:   "🎸",
+  guitar: "🎵",
+  other:  "🎹",
+};
+
+let currentJobId = null;
+let pollInterval = null;
+
+const fileInput    = document.getElementById("fileInput");
+const splitBtn     = document.getElementById("splitBtn");
+const filePreview  = document.getElementById("filePreview");
+const previewName  = document.getElementById("previewName");
+const previewSize  = document.getElementById("previewSize");
+const errorBox     = document.getElementById("errorBox");
+const progressSec  = document.getElementById("progressSection");
+const progressLbl  = document.getElementById("progressLabel");
+const progressSub  = document.getElementById("progressSub");
+const resultsSec   = document.getElementById("resultsSection");
+const stemsGrid    = document.getElementById("stemsGrid");
+const resetBtn     = document.getElementById("resetBtn");
+const uploadCard   = document.getElementById("uploadCard");
+
+function formatSize(bytes) {
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " Ko";
+  return (bytes / (1024 * 1024)).toFixed(1) + " Mo";
+}
+
+function showError(msg) {
+  errorBox.textContent = "⚠ " + msg;
+  errorBox.classList.add("show");
+}
+
+function hideError() {
+  errorBox.classList.remove("show");
+}
+
+// Drag & drop
+uploadCard.addEventListener("dragover", e => { e.preventDefault(); uploadCard.classList.add("dragover"); });
+uploadCard.addEventListener("dragleave", () => uploadCard.classList.remove("dragover"));
+uploadCard.addEventListener("drop", e => {
+  e.preventDefault();
+  uploadCard.classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+fileInput.addEventListener("change", () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+
+function handleFile(file) {
+  previewName.textContent = file.name;
+  previewSize.textContent = formatSize(file.size);
+  filePreview.classList.add("show");
+  splitBtn.disabled = false;
+  hideError();
+  fileInput._selectedFile = file;
+}
+
+splitBtn.addEventListener("click", async () => {
+  const file = fileInput._selectedFile || fileInput.files[0];
+  if (!file) return;
+
+  hideError();
+  splitBtn.disabled = true;
+  progressSec.classList.add("show");
+  progressLbl.textContent = "Envoi du fichier…";
+  progressSub.textContent = "Veuillez patienter.";
+  resultsSec.classList.remove("show");
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch("/upload", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok || data.error) { throw new Error(data.error || "Erreur serveur"); }
+
+    currentJobId = data.job_id;
+    progressLbl.textContent = "Séparation en cours…";
+    progressSub.textContent = "Demucs analyse votre audio. 2–5 min selon la durée.";
+    startPolling();
+  } catch (err) {
+    progressSec.classList.remove("show");
+    splitBtn.disabled = false;
+    showError(err.message);
+  }
+});
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const res = await fetch(`/status/${currentJobId}`);
+      const data = await res.json();
+
+      if (data.status === "done") {
+        clearInterval(pollInterval);
+        progressSec.classList.remove("show");
+        renderStems(data.stems, data.stem_labels);
+        resultsSec.classList.add("show");
+      } else if (data.status === "error") {
+        clearInterval(pollInterval);
+        progressSec.classList.remove("show");
+        splitBtn.disabled = false;
+        showError(data.error || "Erreur inconnue.");
+      }
+    } catch {
+      // réseau temporairement indisponible, on réessaie
+    }
+  }, 4000);
+}
+
+function renderStems(stems, labels) {
+  stemsGrid.innerHTML = "";
+  const order = ["vocals", "drums", "bass", "guitar", "other"];
+  order.forEach((key, i) => {
+    if (!stems[key]) return;
+    const info = labels[key] || {};
+    const color = COLORS[key] || "#aaa";
+    const icon  = info.icon || ICONS[key] || "🎵";
+    const label = info.fr || key;
+
+    const card = document.createElement("div");
+    card.className = "stem-card";
+    card.style.borderTop = `3px solid ${color}`;
+    card.style.animationDelay = (i * 0.08) + "s";
+    card.innerHTML = `
+      <span class="stem-icon">${icon}</span>
+      <div class="stem-name">${label}</div>
+      <div class="stem-key">${key}.wav</div>
+      <a class="dl-btn" href="/download/${stems[key]}"
+         style="background: linear-gradient(135deg, ${color}cc, ${color})"
+         download>
+        ↓ Télécharger
+      </a>
+    `;
+    stemsGrid.appendChild(card);
+  });
+}
+
+resetBtn.addEventListener("click", () => {
+  if (pollInterval) clearInterval(pollInterval);
+  currentJobId = null;
+  fileInput.value = "";
+  fileInput._selectedFile = null;
+  filePreview.classList.remove("show");
+  splitBtn.disabled = true;
+  resultsSec.classList.remove("show");
+  progressSec.classList.remove("show");
+  hideError();
+});
+</script>
+</body>
+</html>
